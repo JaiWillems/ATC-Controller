@@ -8,7 +8,7 @@ from typing import Tuple
 
 
 # Airspace constants.
-CONTROL_ZONE_RADIUS = 10  # Km.
+CONTROL_ZONE_RADIUS = 3  # Km.
 HOLDING_PATTERN_RADIUS = 1  # Km.
 
 
@@ -88,6 +88,19 @@ def _spawn_runways(n: int) -> pd.DataFrame:
     This function will generate the data base containing points centered at
     both thresholds of each runway spawned. The runways form a parallel array
     of runways centered at the origin of the control zone spanning lengthwise.
+
+    The columns of the data base are x1-coordinate, y1-coordinate,
+    x2-coordinate, y2-coordinate, and the runway status value.
+
+    Examples
+    --------
+    >>> _spawn_runways(5)
+         0     1    2     3    4
+    0 -1.2 -0.25 -1.2  0.25  0.0
+    1 -0.6 -0.25 -0.6  0.25  0.0
+    2  0.0 -0.25  0.0  0.25  0.0
+    3  0.6 -0.25  0.6  0.25  0.0
+    4  1.2 -0.25  1.2  0.25  0.0
     """
 
     runway_data = np.empty((n, 5))
@@ -124,3 +137,50 @@ def _spawn_runways(n: int) -> pd.DataFrame:
 
     runway_info = pd.DataFrame(runway_data)
     return runway_info
+
+
+def _spawn_holding_patterns() -> pd.DataFrame:
+    """Return the locations of holding pattern centers.
+
+    Returns
+    -------
+    pd.DataFrame
+        Data base containing the holding pattern locator points.
+
+    Notes
+    -----
+    This function calculates the number of risk-free holding patterns that can
+    be added onto the circle of `radius` and determines the points.
+
+    Examples
+    --------
+    With `CONTROL_ZONE_RADIUS=3`, `HOLDING_PATTERN_RADIUS=1`, and
+    `MIN_SEPARATION=0.1`.
+
+    >>> _spawn_holding_patterns()
+              0         1    2
+    0  0.000000  1.800000  0.0
+    1  1.711902  0.556231  0.0
+    2  1.058013 -1.456231  0.0
+    3 -1.058013 -1.456231  0.0
+    4 -1.711902  0.556231  0.0
+    """
+
+    # Determine the number of holding patterns too create.
+    radius = CONTROL_ZONE_RADIUS - HOLDING_PATTERN_RADIUS - 2 * MIN_SEPARATION
+    c = 2 * math.pi * radius
+    M = math.floor(c / (2 * HOLDING_PATTERN_RADIUS - MIN_SEPARATION))
+
+    holding_pattern_data = np.empty((M, 3))
+
+    # Calculate the angle between successive holding patterns.
+    m = np.arange(0, M, 1)
+    theta = 2 * math.pi * m / M
+
+    # Determine holding patter center points.
+    holding_pattern_data[:, 0] = radius * np.sin(theta)
+    holding_pattern_data[:, 1] = radius * np.cos(theta)
+    holding_pattern_data[:, 2] = 0
+
+    holding_pattern_info = pd.DataFrame(holding_pattern_data)
+    return holding_pattern_info
