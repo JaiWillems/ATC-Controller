@@ -1,5 +1,3 @@
-
-
 import math
 import numpy as np
 import pandas as pd
@@ -10,7 +8,7 @@ from pandas.core.construction import array
 
 
 # Airspace constants.
-CONTROL_ZONE_RADIUS = 3  # Km.
+CONTROL_ZONE_RADIUS = 10  # Km.
 HOLDING_PATTERN_RADIUS = 1  # Km.
 
 
@@ -28,6 +26,33 @@ MIN_SEPARATION = 0.1  # Km.
 
 # Other.
 TIME_STEP_FREQUENCY = 10  # Iterations per second.
+POSIITION_TOLERANCE = 0.1  # Km.
+CURR_LANDING_AC = 0  # Aircraft identifier.
+
+
+def _get_ac_heading(x: float, y: float) -> float:
+    """Return aircraft heading.
+
+    Parameters
+    ----------
+    x : float
+        Aicraft x-coordinate in Km.
+    y : float
+        Aircraft y-coordinate in Km.
+
+    Returns
+    -------
+    float
+        Return aircraft heading in radians.
+    """
+
+    ac_position = np.array([x, y])
+    num = np.sum(-ac_position * np.array([0, 1]))
+    denom = np.linalg.norm(ac_position)
+    ang = np.arccos(num / denom)
+    ang = ang if x < 0 else 2 * math.pi - ang
+
+    return ang
 
 
 def _spawn_aircraft() -> Tuple[float, float, float, str]:
@@ -61,25 +86,20 @@ def _spawn_aircraft() -> Tuple[float, float, float, str]:
     x = random.uniform(-CONTROL_ZONE_RADIUS, CONTROL_ZONE_RADIUS)
     y = math.sqrt(CONTROL_ZONE_RADIUS ** 2 - x ** 2)
     y = y if random.randint(0, 1) else -y
-    ac_position = np.array([x, y])
 
-    # Get aircraft heading.
-    num = np.sum(-ac_position * np.array([0, 1]))
-    denom = np.linalg.norm(ac_position)
-    ang = np.arccos(num / denom)
-    ang = ang if x < 0 else 2 * math.pi - ang
+    ang = _get_ac_heading(x, y)
 
     return x, y, ang, "A"
 
 
-def _initialize_aircraft_info(t_sim: float, ac_spawn_rate: int) -> pd.DataFrame:
+def _initialize_aircraft_info(t_sim: float, ac_spawn_rate: float) -> pd.DataFrame:
     """Generate aircraft information database.
 
     Parameters
     ----------
     t_sim : float
         Simulation time in seconds.
-    ac_spawn_rate : int
+    ac_spawn_rate : float
         Aircraft spawn rate in aircraft per second. Values less then or equal
         to one are acceptable.
 
@@ -88,7 +108,7 @@ def _initialize_aircraft_info(t_sim: float, ac_spawn_rate: int) -> pd.DataFrame:
     pd.DataFrame
         Aircraft data base containing a column for each aircraft and row for
         each position reporting cycle.
-    
+
     Notes
     -----
     The resolution of the data limits viable aircraft spawn rates. It is
@@ -100,9 +120,9 @@ def _initialize_aircraft_info(t_sim: float, ac_spawn_rate: int) -> pd.DataFrame:
     suystem.
     """
 
-
     timesteps_num = t_sim * TIME_STEP_FREQUENCY
     index = np.arange(0, t_sim, 1 / TIME_STEP_FREQUENCY)
+    index = np.round(index, 1)
 
     aircraft_num = ac_spawn_rate * t_sim
     aircraft_arr = np.zeros((timesteps_num, aircraft_num), dtype=object)
@@ -230,3 +250,304 @@ def _spawn_holding_patterns() -> pd.DataFrame:
 
     holding_pattern_info = pd.DataFrame(holding_pattern_data)
     return holding_pattern_info
+
+
+def _get_closest_control_zone(x: float, y: float, hp_info: pd.DataFrame) -> int:
+    """Return index for the closest holding pattern.
+
+    Parameters
+    ----------
+    x : float
+        Aircraft x-coordinate.
+    y : float
+        Aircraft y-coordinate.
+    hp_info : pd.DataFrame
+        Holding pattern information.
+
+    Returns
+    -------
+    int
+        `hp_info` index for the closest holding pattern.
+    """
+
+    min_dist = CONTROL_ZONE_RADIUS
+    min_ind = 0
+
+    for ind in hp_info.index:
+        hp_x = hp_info[0][ind]
+        hp_y = hp_info[1][ind]
+
+        dist = np.sqrt((x - hp_x) ** 2 + (y - hp_y) ** 2)
+
+        if dist < min_dist:
+            min_dist = dist
+            min_ind = ind
+
+    return min_ind
+
+
+def _get_closest_threshold(x: float, y: float, rw_info: pd.DataFrame) -> Tuple[int, int, int]:
+    """Return index for the closest runway threshold.
+
+    Parameters
+    ----------
+    x : float
+        Aircraft x-coordinate.
+    y : float
+        Aircraft y-coordinate.
+    rw_info : pd.DataFrame
+        Runway threshold information.
+
+    Returns
+    -------
+    Tuple[int, int, int]
+        `rw_info` index for the closest runway threshold. The first value is
+        the row index and the latter two are the x and y position column
+        indices.
+    """
+
+    min_dist = CONTROL_ZONE_RADIUS
+    min_ind = (0, 0, 0)
+
+    for ind in rw_info.index:
+
+        hp_x = rw_info[0][ind]
+        hp_y = rw_info[1][ind]
+
+        dist1 = np.sqrt((x - hp_x) ** 2 + (y - hp_y) ** 2)
+
+        hp_x = rw_info[2][ind]
+        hp_y = rw_info[3][ind]
+
+        dist2 = np.sqrt((x - hp_x) ** 2 + (y - hp_y) ** 2)
+
+        if dist1 < min_dist:
+            min_dist = dist1
+            min_ind = (ind, 0, 1)
+        elif dist2 < min_dist:
+            min_dist = dist2
+            min_ind = (ind, 3, 4)
+
+    return min_ind
+
+
+def _get_next_position(x: float, y: float, heading: float, state: str, hp_info:
+                       pd.DataFrame, rw_info: pd.DataFrame, ac: int,
+                       CURR_LANDING_AC) -> Tuple[float, float, float, str]:
+    """Calculate the aircrafts next position.
+
+    Parameters
+    ----------
+    x : float
+        Aircraft x-coordinate in Km.
+    y : float
+        Aircraft y-coordinate in Km.
+    heading : float
+        Aircraft heading in decimal radians.
+    state : str
+        Aircraft current state.
+    hp_info : pd.DataFrame
+        Holding pattern positions.
+    rw_info : pd.DataFrame
+        Runway position information.
+    ac : int
+        Aircraft identifier.
+    CURR_LANDING_AC : [type]
+        Current landing aircraft.
+
+    Returns
+    -------
+    Tuple[float, float, float, str]
+        Return the next x, y, heading, and state information.
+    """
+
+    if state == "A":
+
+        radius = np.sqrt(x ** 2 + y ** 2)
+
+        min_R = CONTROL_ZONE_RADIUS - MIN_SEPARATION - POSIITION_TOLERANCE
+        max_R = CONTROL_ZONE_RADIUS - MIN_SEPARATION + POSIITION_TOLERANCE
+
+        if (min_R < radius) | (radius < max_R):
+
+            hp_ind = _get_closest_control_zone(x, y, hp_info)
+
+            if hp_info[2][hp_ind] == 0:
+
+                state_new = "C"
+                heading_new = _get_ac_heading(hp_info[0][hp_ind] - x, hp_info[1][hp_ind] - y)
+
+            else:
+
+                state_new = "B"
+                heading_new = (hp_info[2][hp_ind] + np.pi / 2) % (2 * np.pi)
+
+        else:
+
+            state_new = "A"
+            heading_new = heading
+
+        x_new = x + MAX_SPEED * np.sin(heading_new) / TIME_STEP_FREQUENCY
+        y_new = y + MAX_SPEED * np.cos(heading_new) / TIME_STEP_FREQUENCY
+
+    elif state == "B":
+
+        hp_ind = _get_closest_control_zone(x, y, hp_info)
+
+        if hp_info[2][hp_ind] == 0:
+
+            state_new = "C"
+            heading_new = _get_ac_heading(hp_info[0][hp_ind] - x, hp_info[1][hp_ind] - y)
+
+        else:
+
+            state_new = "B"
+            heading_new = heading - MAX_SPEED / (TIME_STEP_FREQUENCY * (CONTROL_ZONE_RADIUS - MIN_SEPARATION))
+
+        x_new = x + MAX_SPEED * np.sin(heading_new) / TIME_STEP_FREQUENCY
+        y_new = y + MAX_SPEED * np.cos(heading_new) / TIME_STEP_FREQUENCY
+
+    elif state == "C":
+
+        hp_ind = _get_closest_control_zone(x, y, hp_info)
+        dist = np.sqrt((hp_info[0][hp_ind] - x) ** 2 + (hp_info[1][hp_ind] - y) ** 2)
+
+        if dist < POSIITION_TOLERANCE + 1:
+
+            state_new = "D"
+            heading_new = heading
+
+            x_new = x
+            y_new = y
+
+        else:
+
+            state_new = "C"
+            heading_new = heading
+
+            x_new = x + MAX_SPEED * np.sin(heading_new) / TIME_STEP_FREQUENCY
+            y_new = y + MAX_SPEED * np.cos(heading_new) / TIME_STEP_FREQUENCY
+
+    elif state == "D":
+
+        if ac == CURR_LANDING_AC:
+
+            row_ind, x_ind, y_ind = _get_closest_threshold(x, y, rw_info)
+
+            state_new = "E"
+            heading_new = _get_ac_heading(rw_info[x_ind][row_ind] - x, rw_info[y_ind][row_ind] - y)
+
+            x_new = x + MAX_SPEED * np.sin(heading_new) / TIME_STEP_FREQUENCY
+            y_new = y + MAX_SPEED * np.cos(heading_new) / TIME_STEP_FREQUENCY
+
+        else:
+
+            state_new = "D"
+            heading_new = heading
+
+            x_new = x
+            y_new = y
+
+    elif state == "E":
+
+        row_ind, x_ind, y_ind = _get_closest_threshold(x, y, rw_info)
+        dist = np.sqrt((rw_info[x_ind][row_ind] - x) ** 2 + (rw_info[y_ind][row_ind] - y) ** 2)
+
+        if (dist < MIN_SEPARATION) | (CURR_LANDING_AC == ac):
+
+            x_ind = 0 if x_ind == 2 else 2
+            y_ind = 1 if y_ind == 3 else 3
+
+            CURR_LANDING_AC += 1
+
+            state_new = "F"
+            heading_new = _get_ac_heading(rw_info[x_ind][row_ind] - x, rw_info[y_ind][row_ind] - y)
+
+            x_new = x + MAX_SPEED * np.sin(heading_new) / TIME_STEP_FREQUENCY
+            y_new = y + MAX_SPEED * np.cos(heading_new) / TIME_STEP_FREQUENCY
+
+        else:
+
+            state_new = "E"
+            heading_new = heading
+
+            x_new = x + MAX_SPEED * np.sin(heading_new) / TIME_STEP_FREQUENCY
+            y_new = y + MAX_SPEED * np.cos(heading_new) / TIME_STEP_FREQUENCY
+
+    elif state == "F":
+
+        row_ind, x_ind, y_ind = _get_closest_threshold(x, y, rw_info)
+        dist = np.sqrt((rw_info[x_ind][row_ind] - x) ** 2 + (rw_info[y_ind][row_ind] - y) ** 2)
+
+        if abs(dist - RUNWAY_LENGTH / 2) < POSIITION_TOLERANCE:
+            x_new, y_new, heading_new, state_new = -1, -1, -1, "END"
+
+        else:
+
+            state_new = "F"
+            heading_new = heading
+
+            x_new = x + MAX_SPEED * np.sin(heading_new) / TIME_STEP_FREQUENCY
+            y_new = y + MAX_SPEED * np.cos(heading_new) / TIME_STEP_FREQUENCY
+
+    else:
+
+        x_new, y_new, heading_new, state_new = -1, -1, -1, "END"
+
+    return x_new, y_new, heading_new, state_new
+
+
+def _propagate_positions(hp_info: pd.DataFrame, rw_info: pd.DataFrame, ac_info: pd.DataFrame) -> pd.DataFrame:
+    """Propagate aircraft positions.
+
+    Parameters
+    ----------
+    hp_info : pd.DataFrame
+        Holding pattern informmation.
+    rw_info : pd.DataFrame
+        Runway position information.
+    ac_info : pd.DataFrame
+        Aircraft position and state information.
+
+    Returns
+    -------
+    pd.DataFrame
+        Propagated aircraft position and state information.
+    """
+
+    for time in ac_info.index:
+        for ac in ac_info.columns:
+
+            tup = ac_info[ac][time]
+            if isinstance(tup, tuple):
+                x, y, heading, state = tup
+                tup_new = _get_next_position(x, y, heading, state, hp_info, rw_info, ac, CURR_LANDING_AC)
+
+                if np.round(time + 1 / TIME_STEP_FREQUENCY, 1) < ac_info.index.max():
+                    ac_info[ac][np.round(time + 1 / TIME_STEP_FREQUENCY, 1)] = tup_new
+
+    return ac_info
+
+
+def simulate(t_sim: float, ac_spawn_rate: float) -> None:
+    """Simulate autonomous ATC system.
+
+    This function will simulate the autonomous ATC system using the program
+    defined constants and the simulation parameters. The propagated position
+    data for the aircraft are exported as a csv file.
+
+    Parameters
+    ----------
+    t_sim : float
+        Simulation time in seconds.
+    ac_spawn_rate : float
+        Aircraft spawn rate in aircraft per second. Values less then or equal
+        to one are acceptable.
+    """
+
+    hp_info = _spawn_holding_patterns()
+    rw_info = _spawn_runways()
+    ac_info = _initialize_aircraft_info(t_sim, ac_spawn_rate)
+
+    propagated_data = _propagate_positions(hp_info, rw_info, ac_info)
+    propagated_data.to_csv("propagated_simulation_data.csv")
