@@ -6,6 +6,8 @@ import pandas as pd
 import random
 from typing import Tuple
 
+from pandas.core.construction import array
+
 
 # Airspace constants.
 CONTROL_ZONE_RADIUS = 3  # Km.
@@ -28,15 +30,16 @@ MIN_SEPARATION = 0.1  # Km.
 TIME_STEP_FREQUENCY = 10  # Iterations per second.
 
 
-def _spawn_aircraft() -> Tuple[float, float, float]:
+def _spawn_aircraft() -> Tuple[float, float, float, str]:
     """Return aircraft on control zone boundary.
 
     Returns
     -------
-    Tuple[float, float, float]
-        Return a tuple containing the x-coordinate, y-coordinate, and initial
-        heading of the spawned aircraft. The coordinates will be in km whereas
-        the heading will be in degrees clockwise of North.
+    Tuple[float, float, float, str]
+        Return a tuple containing the x-coordinate, y-coordinate, initial
+        heading, and initial state of the spawned aircraft. The coordinates
+        will be in km whereas the heading will be in degrees clockwise of
+        North.
 
     Notes
     -----
@@ -64,19 +67,59 @@ def _spawn_aircraft() -> Tuple[float, float, float]:
     num = np.sum(-ac_position * np.array([0, 1]))
     denom = np.linalg.norm(ac_position)
     ang = np.arccos(num / denom)
-    print(ang)
     ang = ang if x < 0 else 2 * math.pi - ang
 
-    return x, y, ang
+    return x, y, ang, "A"
 
 
-def _spawn_runways(n: int) -> pd.DataFrame:
-    """Return `DataFrame` with runway locator points.
+def _initialize_aircraft_info(t_sim: float, ac_spawn_rate: int) -> pd.DataFrame:
+    """Generate aircraft information database.
 
     Parameters
     ----------
-    n : int
-        Number of runways to spawn.
+    t_sim : float
+        Simulation time in seconds.
+    ac_spawn_rate : int
+        Aircraft spawn rate in aircraft per second. Values less then or equal
+        to one are acceptable.
+
+    Returns
+    -------
+    pd.DataFrame
+        Aircraft data base containing a column for each aircraft and row for
+        each position reporting cycle.
+    
+    Notes
+    -----
+    The resolution of the data limits viable aircraft spawn rates. It is
+    recommended to use spawn rates less then or equal to one.
+
+    The columns will defult to zero for times that the aircraft is not
+    initialized for or has not been propagated for. The data frame will also
+    contain the inital positions at various time steps for aircraft added to
+    suystem.
+    """
+
+
+    timesteps_num = t_sim * TIME_STEP_FREQUENCY
+    index = np.arange(0, t_sim, 1 / TIME_STEP_FREQUENCY)
+
+    aircraft_num = ac_spawn_rate * t_sim
+    aircraft_arr = np.zeros((timesteps_num, aircraft_num), dtype=object)
+
+    aircraft_info = pd.DataFrame(aircraft_arr, index=index)
+
+    time_steps_per_ac = math.floor(timesteps_num / aircraft_num)
+    for i in range(aircraft_num):
+
+        ind = index[i * time_steps_per_ac]
+        aircraft_info[i][ind] = _spawn_aircraft()
+
+    return aircraft_info
+
+
+def _spawn_runways() -> pd.DataFrame:
+    """Return `DataFrame` with runway locator points.
 
     Returns
     -------
@@ -94,7 +137,9 @@ def _spawn_runways(n: int) -> pd.DataFrame:
 
     Examples
     --------
-    >>> _spawn_runways(5)
+    With `NUMBER_OF_RUNWAYS=5`.
+
+    >>> _spawn_runways()
          0     1    2     3    4
     0 -1.2 -0.25 -1.2  0.25  0.0
     1 -0.6 -0.25 -0.6  0.25  0.0
@@ -103,6 +148,7 @@ def _spawn_runways(n: int) -> pd.DataFrame:
     4  1.2 -0.25  1.2  0.25  0.0
     """
 
+    n = NUMBER_OF_RUNWAYS
     runway_data = np.empty((n, 5))
 
     if not n % 2:
