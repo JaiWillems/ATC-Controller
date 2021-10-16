@@ -1,8 +1,9 @@
 
 
-import numpy as np
-import random
 import math
+import numpy as np
+import pandas as pd
+import random
 from typing import Tuple
 
 
@@ -46,8 +47,11 @@ def _spawn_aircraft() -> Tuple[float, float, float]:
 
     Examples
     --------
-    >>> _spawn_aircraft()
+    With `CONTROL_ZONE_RADIUS = 10`, an example aircraft spawn event is as
+    follows:
 
+    >>> _spawn_aircraft()
+    (5.486794024557362, 8.360328422501214, 3.7223764711048473)
     """
 
     # Get aircraft coordinates.
@@ -64,3 +68,59 @@ def _spawn_aircraft() -> Tuple[float, float, float]:
     ang = ang if x < 0 else 2 * math.pi - ang
 
     return x, y, ang
+
+
+def _spawn_runways(n: int) -> pd.DataFrame:
+    """Return `DataFrame` with runway locator points.
+
+    Parameters
+    ----------
+    n : int
+        Number of runways to spawn.
+
+    Returns
+    -------
+    pd.DataFrame
+        Data base containing the runway locator points.
+
+    Notes
+    -----
+    This function will generate the data base containing points centered at
+    both thresholds of each runway spawned. The runways form a parallel array
+    of runways centered at the origin of the control zone spanning lengthwise.
+    """
+
+    runway_data = np.empty((n, 5))
+
+    if not n % 2:
+        for i, N in enumerate(range(1, n, 2)):
+
+            x = N * (RUNWAY_SEPARATION + RUNWAY_WIDTH) / 2
+            y_base, y_top = - RUNWAY_LENGTH / 2, RUNWAY_LENGTH / 2
+
+            runway_data[i, 0] = x
+            runway_data[i, 1] = y_base
+            runway_data[i, 2] = x
+            runway_data[i, 3] = y_top
+            runway_data[i, 4] = 0
+
+            runway_data[i + n // 2, 0] = - x
+            runway_data[i + n // 2, 1] = y_base
+            runway_data[i + n // 2, 2] = - x
+            runway_data[i + n // 2, 3] = y_top
+            runway_data[i + n // 2, 4] = 0
+
+    else:
+        for i, N in enumerate(range(- n // 2 + 1, n // 2 + 1)):
+
+            x = N * (RUNWAY_SEPARATION + RUNWAY_WIDTH)
+            y_base, y_top = - RUNWAY_LENGTH / 2, RUNWAY_LENGTH / 2
+
+            runway_data[i, 0] = x
+            runway_data[i, 1] = y_base
+            runway_data[i, 2] = x
+            runway_data[i, 3] = y_top
+            runway_data[i, 4] = 0
+
+    runway_info = pd.DataFrame(runway_data)
+    return runway_info
