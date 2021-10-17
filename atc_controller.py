@@ -4,8 +4,6 @@ import pandas as pd
 import random
 from typing import Tuple
 
-from pandas.core.construction import array
-
 
 # Airspace constants.
 CONTROL_ZONE_RADIUS = 10  # Km.
